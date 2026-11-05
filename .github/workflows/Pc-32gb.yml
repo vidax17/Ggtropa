@@ -30,7 +30,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: 2. Liberar +150GB no SSD NVMe e Ativar 32GB de Memoria na Hora
+      - name: 2. Liberar +150GB no SSD NVMe e Destravar 32GB de Memoria
         shell: powershell
         run: |
           Write-Host "1/2 - Limpando pastas pesadas nos discos C: e D: para liberar o SSD NVMe..."
@@ -52,41 +52,65 @@ jobs:
             }
           }
 
-          Write-Host "2/2 - Ativando +16GB no SSD NVMe D: (32GB Totais Imediatos sem reiniciar!)..."
-          $cs = Get-WmiObject Win32_ComputerSystem -EnableAllPrivileges
-          $cs.AutomaticManagedPagefile = $false
-          $cs.Put() | Out-Null
+          Write-Host "2/2 - Destravando 32GB de Memoria Total no SSD NVMe..."
+          # Desativa gerenciamento automatico para permitir forcar 16GB extras de Pagefile
+          $cs = Get-CimInstance -ClassName Win32_ComputerSystem
+          Set-CimInstance -InputObject $cs -Property @{AutomaticManagedPagefile=$false} -ErrorAction SilentlyContinue
 
-          Set-WmiInstance -Class Win32_PageFileSetting -Arguments @{Name="D:\pagefile.sys"; InitialSize = 16384; MaximumSize = 16384} -ErrorAction SilentlyContinue | Out-Null
+          # Atualiza o pagefile existente no disco D: (ou C:) para 16384 MB (16 GB)
+          $pfD = Get-CimInstance -ClassName Win32_PageFileSetting | Where-Object { $_.Name -like "D:*" }
+          if ($pfD) {
+            Set-CimInstance -InputObject $pfD -Property @{InitialSize=16384; MaximumSize=16384} -ErrorAction SilentlyContinue
+          } else {
+            New-CimInstance -ClassName Win32_PageFileSetting -Property @{Name="D:\pagefile.sys"; InitialSize=16384; MaximumSize=16384} -ErrorAction SilentlyContinue | Out-Null
+          }
 
-          Write-Host "=== Status da Memoria e SSD NVMe ==="
-          Get-CimInstance Win32_OperatingSystem | Select-Object `
-            @{Name="RAM_Fisica_GB";Expression={[math]::Round($_.TotalVisibleMemorySize / 1MB, 1)}}, `
-            @{Name="Memoria_Total_32GB";Expression={[math]::Round($_.TotalVirtualMemorySize / 1MB, 1)}}
+          # Tambem garante pagefile no NVMe C: para aplicacao imediata de commit limit (32GB+)
+          $pfC = Get-CimInstance -ClassName Win32_PageFileSetting | Where-Object { $_.Name -like "C:*" }
+          if ($pfC) {
+            Set-CimInstance -InputObject $pfC -Property @{InitialSize=16384; MaximumSize=16384} -ErrorAction SilentlyContinue
+          } else {
+            New-CimInstance -ClassName Win32_PageFileSetting -Property @{Name="C:\pagefile.sys"; InitialSize=16384; MaximumSize=16384} -ErrorAction SilentlyContinue | Out-Null
+          }
+
+          Write-Host "=== Status do SSD NVMe e Memoria Configurada ==="
+          Get-CimInstance Win32_PageFileSetting | Select-Object Name, InitialSize, MaximumSize
           Get-PSDrive C, D
 
-      - name: 3. Ativar Tela Remota (RDP) e Conectar Tailscale
+      - name: 3. Ativar Tela Remota (Windows Server 2025 Fix) e Conectar Tailscale
         shell: powershell
         env:
           TS_KEY: ${{ secrets.TAILSCALE_KEY }}
           SENHA_RDP: ${{ secrets.RDP_PASS }}
         run: |
+          Write-Host "=== Habilitando e Iniciando o Servico RDP no Windows Server 2025 ==="
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
+          # Libera Firewall e forca o servico TermService (RDP) a rodar
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
+          New-NetFirewallRule -DisplayName "Allow-RDP-3389" -Direction Inbound -LocalPort 3389 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue | Out-Null
+          Set-Service -Name "UmRdpService" -StartupType Automatic -ErrorAction SilentlyContinue
+          Set-Service -Name "TermService" -StartupType Automatic -ErrorAction SilentlyContinue
+          Start-Service -Name "UmRdpService" -ErrorAction SilentlyContinue
+          Start-Service -Name "TermService" -ErrorAction SilentlyContinue
+
+          # Ativa o Audio
           Set-Service -Name "Audiosrv" -StartupType Automatic -ErrorAction SilentlyContinue
           Start-Service -Name "Audiosrv" -ErrorAction SilentlyContinue
 
+          # Configura Usuario e Senha
           $senhaFinal = if ([string]::IsNullOrEmpty($env:SENHA_RDP)) { "SenhaForte123!" } else { $env:SENHA_RDP }
-          net user runneradmin "$senhaFinal"
+          net user runneradmin "$senhaFinal" /active:yes
+          net localgroup "Remote Desktop Users" runneradmin /add 2>$null
 
+          # Instala e Conecta o Tailscale (com --accept-routes e firewall liberado)
           Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "tailscale.exe"
           Start-Process -FilePath ".\tailscale.exe" -ArgumentList "/quiet" -Wait
           Start-Sleep -Seconds 5
-          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="$env:TS_KEY" --hostname="pc-virtual-32gb" --unattended
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="$env:TS_KEY" --hostname="pc-virtual-32gb" --unattended --reset
           Start-Sleep -Seconds 5
-          Write-Host "VM Conectada ao Tailscale com Sucesso! Veja o IP no seu app do Tailscale."
+          Write-Host "VM Conectada ao Tailscale com Sucesso! Veja o novo IP no seu app do Tailscale."
 
       - name: 4. Abrir Programas Automaticamente (Pasta Persistente)
         shell: powershell
@@ -102,7 +126,6 @@ jobs:
           $horas = [int]"${{ github.event.inputs.horas_ligado }}"
           $segundos = $horas * 3600
           Write-Host "O PC ficara ligado por $horas hora(s) ($segundos segundos)."
-          Write-Host "Para desligar antes e salvar seus arquivos, basta clicar em 'Cancel workflow' no GitHub!"
           Start-Sleep -Seconds $segundos
 
       - name: 6. Salvar Arquivos e Desligar PC com Seguranca
