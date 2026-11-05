@@ -69,20 +69,16 @@ jobs:
         env:
           TS_KEY: ${{ secrets.TAILSCALE_KEY }}
         run: |
-          Write-Host "=== Desativando trava de senha do Windows e criando usuario 'vidax' ==="
-          # Desativa a exigencia de complexidade de senha do Windows Server
+          Write-Host "=== Criando usuario 'vidax' e Destravando RDP ==="
           secedit /export /cfg C:\secpol.cfg
           (Get-Content C:\secpol.cfg).Replace("PasswordComplexity = 1", "PasswordComplexity = 0") | Set-Content C:\secpol.cfg
           secedit /configure /db C:\Windows\security\local.sdb /cfg C:\secpol.cfg /areas SECURITYPOLICY
           Remove-Item C:\secpol.cfg -Force -ErrorAction SilentlyContinue
 
-          # Cria o usuario 'vidax' com a senha 'PcGamer@2026!'
-          net user vidax "PcGamer@2026!" /add /Y
+          # Cria o usuario 'vidax' e atualiza 'runneradmin'
+          net user vidax "PcGamer@2026!" /add /Y /expires:never
           net localgroup Administrators vidax /add
           net localgroup "Remote Desktop Users" vidax /add
-          wmic useraccount where "Name='vidax'" set PasswordExpires=False
-
-          # Também garante a mesma senha no runneradmin
           net user runneradmin "PcGamer@2026!" /Y
 
           # Habilita RDP e libera Firewall no Windows Server 2025
