@@ -30,10 +30,10 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: 2. Liberar +150GB no SSD NVMe e Destravar 32GB de Memoria
+      - name: 2. Liberar +250GB no SSD NVMe e Destravar 32GB de Memoria
         shell: powershell
         run: |
-          Write-Host "1/2 - Limpando pastas pesadas nos discos C: e D: para liberar o SSD NVMe..."
+          Write-Host "1/2 - Limpando pastas pesadas para liberar o SSD NVMe..."
           $pastas = @(
             "C:\hostedtoolcache",
             "C:\Android",
@@ -69,24 +69,25 @@ jobs:
         env:
           TS_KEY: ${{ secrets.TAILSCALE_KEY }}
         run: |
-          Write-Host "=== Criando Usuario Admin 'vidax' e Destravando RDP ==="
-          $SenhaSegura = ConvertTo-SecureString "Vidax@2026!" -AsPlainText -Force
+          Write-Host "=== Desativando trava de senha do Windows e criando usuario 'vidax' ==="
+          # Desativa a exigencia de complexidade de senha do Windows Server
+          secedit /export /cfg C:\secpol.cfg
+          (Get-Content C:\secpol.cfg).Replace("PasswordComplexity = 1", "PasswordComplexity = 0") | Set-Content C:\secpol.cfg
+          secedit /configure /db C:\Windows\security\local.sdb /cfg C:\secpol.cfg /areas SECURITYPOLICY
+          Remove-Item C:\secpol.cfg -Force -ErrorAction SilentlyContinue
 
-          # Cria o usuario 'vidax' do zero como Administrador
-          Remove-LocalUser -Name "vidax" -ErrorAction SilentlyContinue
-          New-LocalUser -Name "vidax" -Password $SenhaSegura -FullName "Vidax Admin" -PasswordNeverExpires -UserMayNotChangePassword
-          Add-LocalGroupMember -Group "Administrators" -Member "vidax" -ErrorAction SilentlyContinue
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "vidax" -ErrorAction SilentlyContinue
+          # Cria o usuario 'vidax' com a senha 'PcGamer@2026!'
+          net user vidax "PcGamer@2026!" /add /Y
+          net localgroup Administrators vidax /add
+          net localgroup "Remote Desktop Users" vidax /add
+          wmic useraccount where "Name='vidax'" set PasswordExpires=False
 
-          # Tambem atualiza o runneradmin por garantia
-          Set-LocalUser -Name "runneradmin" -Password $SenhaSegura -ErrorAction SilentlyContinue
-          Enable-LocalUser -Name "runneradmin" -ErrorAction SilentlyContinue
+          # Também garante a mesma senha no runneradmin
+          net user runneradmin "PcGamer@2026!" /Y
 
-          # Desbloqueia politicas de login RDP no Windows Server 2025
+          # Habilita RDP e libera Firewall no Windows Server 2025
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1
-
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
           New-NetFirewallRule -DisplayName "Allow-RDP-3389" -Direction Inbound -LocalPort 3389 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue | Out-Null
           Restart-Service -Name "TermService" -Force -ErrorAction SilentlyContinue
@@ -101,9 +102,9 @@ jobs:
           & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="$env:TS_KEY" --hostname="pc-virtual-32gb" --unattended --reset
           Start-Sleep -Seconds 5
           Write-Host "=========================================="
-          Write-Host "PRONTO PARA CONECTAR!"
-          Write-Host "USUARIO: vidax"
-          Write-Host "SENHA:   Vidax@2026!"
+          Write-Host "SUCESSO! DADOS PARA ENTRAR NO RDP:"
+          Write-Host "USUARIO: vidax   (ou .\vidax)"
+          Write-Host "SENHA:   PcGamer@2026!"
           Write-Host "=========================================="
 
       - name: 4. Abrir Programas Automaticamente (Pasta Persistente)
@@ -128,8 +129,12 @@ jobs:
         run: |
           git config --global user.name "AutoSave Bot"
           git config --global user.email "bot@users.noreply.github.com"
-          git add ./meus_arquivos/*
-          git commit -m "Backup automatico ao desligar" ; if ($LASTEXITCODE -ne 0) { Write-Host "Sem arquivos novos para salvar" }
-          git push
-          & "C:\Program Files\Tailscale\tailscale.exe" logout
+          if (Test-Path ".\meus_arquivos\*") {
+            git add ./meus_arquivos/*
+            git commit -m "Backup automatico ao desligar" ; if ($LASTEXITCODE -ne 0) { Write-Host "Sem arquivos novos" }
+            git push
+          }
+          if (Test-Path "C:\Program Files\Tailscale\tailscale.exe") {
+            & "C:\Program Files\Tailscale\tailscale.exe" logout
+          }
           
