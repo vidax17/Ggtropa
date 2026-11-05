@@ -7,14 +7,13 @@ jobs:
   pc-gamer-32gb:
     executor:
       name: win/default
-      size: large # <-- AQUI ELE ALOCA 8 CORES E 32 GB DE RAM FISICA REAL!
+      size: large
     steps:
       - checkout
       - run:
           name: 1. Ativar Compressao de RAM + DirectX + Usuario RDP
           shell: powershell.exe
           command: |
-            Write-Host "Configurando Usuario e RDP..."
             net user vidax "PcGamer@2026!" /add /Y
             net localgroup Administrators vidax /add
             net localgroup "Remote Desktop Users" vidax /add
@@ -33,7 +32,7 @@ jobs:
             & "C:\Program Files\Tailscale\tailscale.exe" ip -4
 
       - run:
-          name: 3. Manter PC de 32GB Ligado (Ate 4h seguidas)
+          name: 3. Manter PC de 32GB Ligado
           shell: powershell.exe
           no_output_timeout: 5h
           command: |
