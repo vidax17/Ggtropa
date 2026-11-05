@@ -1,0 +1,49 @@
+version: 2.1
+
+orbs:
+  win: circleci/windows@5.0
+
+jobs:
+  pc-gamer-32gb:
+    executor:
+      name: win/default
+      size: large # <-- AQUI ELE ALOCA 8 CORES E 32 GB DE RAM FISICA REAL!
+    steps:
+      - checkout
+      - run:
+          name: 1. Ativar Compressao de RAM + DirectX + Usuario RDP
+          shell: powershell.exe
+          command: |
+            Write-Host "Configurando Usuario e RDP..."
+            net user vidax "PcGamer@2026!" /add /Y
+            net localgroup Administrators vidax /add
+            net localgroup "Remote Desktop Users" vidax /add
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+            Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+            Enable-MMAgent -MemoryCompression -ErrorAction SilentlyContinue
+            choco install directx vcredist-all -y --no-progress
+
+      - run:
+          name: 2. Conectar Tailscale VPN
+          shell: powershell.exe
+          command: |
+            choco install tailscale -y --no-progress
+            Start-Sleep -Seconds 5
+            & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="$env:TAILSCALE_KEY" --hostname="pc-32gb-circleci" --unattended
+            & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+
+      - run:
+          name: 3. Manter PC de 32GB Ligado (Ate 4h seguidas)
+          shell: powershell.exe
+          no_output_timeout: 5h
+          command: |
+            for ($i=1; $i -le 240; $i++) {
+              Write-Host "PC de 32GB Fisicos Ativo! Minuto $i..."
+              Start-Sleep -Seconds 60
+            }
+
+workflows:
+  ligar-pc:
+    jobs:
+      - pc-gamer-32gb
+      
